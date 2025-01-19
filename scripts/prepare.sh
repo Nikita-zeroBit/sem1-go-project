@@ -17,4 +17,5 @@ psql -h 0.0.0.0 -U validator -d project-sem-1 -c "TRUNCATE TABLE prices;"
 echo "База данных подготовлена."
 
 go get -u github.com/lib/pq
+go build main.go
 echo "Зависимости установлены."
