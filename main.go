@@ -106,7 +106,7 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGet(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.Query("SELECT id, created_at, name, category, price FROM prices")
+	rows, err := db.Query("SELECT id, name, category, price, created_at FROM prices")
 	if err != nil {
 		http.Error(w, "Ошибка получения данных", http.StatusInternalServerError)
 		return
