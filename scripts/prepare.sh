@@ -11,6 +11,7 @@ set -e
 #     echo "База данных project-sem-1 не существует."
 #     psql -h 0.0.0.0 -U postgres -c "CREATE DATABASE project-sem-1 OWNER validator;"
 # fi
+export PGPASSWORD='val1dat0r'
 psql -h 0.0.0.0 -U validator -d project-sem-1 -c "CREATE TABLE IF NOT EXISTS prices (id SERIAL PRIMARY KEY, created_at DATE NOT NULL, name TEXT NOT NULL, category TEXT NOT NULL, price INTEGER NOT NULL);"
 psql -h 0.0.0.0 -U validator -d project-sem-1 -c "TRUNCATE TABLE prices;"
 echo "База данных подготовлена."
