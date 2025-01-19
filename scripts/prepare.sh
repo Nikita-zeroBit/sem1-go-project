@@ -16,6 +16,5 @@ psql -h 0.0.0.0 -U validator -d project-sem-1 -c "CREATE TABLE IF NOT EXISTS pri
 psql -h 0.0.0.0 -U validator -d project-sem-1 -c "TRUNCATE TABLE prices;"
 echo "База данных подготовлена."
 
-go mod init sem1-project
 go get -u github.com/lib/pq
 echo "Зависимости установлены."
