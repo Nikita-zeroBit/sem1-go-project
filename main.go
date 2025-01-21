@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,7 +49,7 @@ func handlePrices(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handlePost(w http.ResponseWriter, r *http.Request) {
+func handlePost(w http.ResponseWriter, r *http.Request){
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Ошибка чтения запроса", http.StatusInternalServerError)
@@ -60,42 +61,79 @@ func handlePost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Не удалось разархивировать архив", http.StatusBadRequest)
 		return
 	}
-
-	var totalItems, totalCategories, totalPrice int
-	categorySet := make(map[string]bool)
 	
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, "Ошибка начала транзакции", http.StatusInternalServerError)
+		return
+	}
+	var errExec error
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			log.Printf("Паника: %v", p)
+			http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+			return
+		}
+		if errExec != nil {
+			log.Fatalf("Откат транзакции. Ошибка %v", errExec)
+			tx.Rollback()
+		} else {
+			log.Printf("Фиксирование транзакции")
+			tx.Commit()
+		}
+	}()
+
 	for _, file := range zipReader.File {
 		if !strings.Contains(file.Name, ".csv") {
 			continue
 		}
-		f, _ := file.Open()
+		f, errExec := file.Open()
+		if errExec != nil {
+			http.Error(w, "Ошибка открытия csv-файла из архива", http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
 
 		reader := csv.NewReader(f)
-		for {
-			record, err := reader.Read()
-			if err == io.EOF {
-				break
-			}
-			// Пропуск первой строки
+		// Чтение файла перед работой с БД
+		records, errExec := reader.ReadAll()
+		if errExec != nil {
+			http.Error(w, "Ошибка чтения CSV файла", http.StatusBadRequest)
+			return
+		}
+
+		for _, record := range records {
+		// Пропуск первой строки
 			if record[0] == "id" {
 				continue
 			}
-			
-			id, _ := strconv.ParseInt(record[0], 10, 64)
+			// Убрал считывание id, т.к. он автоинкрементный и не требуется в запросе к бд
 			name := record[1]
 			category := record[2]
-			price, _ := strconv.ParseFloat(record[3], 64)
+			price, errExec := strconv.ParseFloat(record[3], 64)
+			if errExec != nil {
+				http.Error(w, "Некорректные данные в поле price", http.StatusBadRequest)
+				return
+			}
 			createdAt := record[4]
 			var priceInt int = int(math.Round(price))
 
-			_, _ = db.Exec("INSERT INTO prices (id, name, category, price, created_at) VALUES ($1, $2, $3, $4, $5)", id, name, category, priceInt, createdAt)
-
-			totalItems = totalItems + 1
-			totalPrice = totalPrice + priceInt
-			categorySet[category] = true
+			_, errExec = tx.Exec("INSERT INTO prices (name, category, price, created_at) VALUES ($1, $2, $3, $4)", name, category, priceInt, createdAt)
+			if errExec != nil {
+				http.Error(w, "Ошибка вставки данных в базу", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
-	totalCategories = len(categorySet)
+	// Сбор статистики по всей таблице, а не текущей загрузке внутри транзакции
+	row := tx.QueryRow("SELECT COUNT(name), COUNT(DISTINCT category), SUM(price) FROM prices")
+    var totalItems, totalCategories, totalPrice int
+    errExec = row.Scan(&totalItems, &totalCategories, &totalPrice)
+    if errExec != nil {
+        http.Error(w, "Ошибка получения данных из базы", http.StatusInternalServerError)
+        return
+    }
 	response := Response{
 		TotalItems: totalItems,
 		TotalCategories: totalCategories,
@@ -120,7 +158,11 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, price int
 		var createdAt, name, category string
-		rows.Scan(&id, &name, &category, &price, &createdAt)
+		err := rows.Scan(&id, &name, &category, &price, &createdAt)
+		if err != nil {
+			http.Error(w, "Ошибка сканирования данных", http.StatusInternalServerError)
+			return
+		}
 		writer.Write([]string{
 			strconv.FormatInt(int64(id), 10),
 			name,
@@ -129,6 +171,11 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 			createdAt,
 		})
 	}
+	if err = rows.Err(); err != nil {
+		http.Error(w, "Ошибка обработки строк", http.StatusInternalServerError)
+		return
+	}
+
 	writer.Flush()
 	file_data.Close()
 	zipFile, _ := os.CreateTemp("", "data-*.zip")
